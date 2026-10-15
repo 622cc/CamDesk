@@ -10,6 +10,7 @@ CamDesk 是一款原生 macOS IP 摄像头查看与本地录像工具。它支�
 - ONVIF 设备发现、云台和预置位
 - 截图、原码录像及本地回放
 - 视频缩放、音频监听和系统浅色/深色外观
+- 窄窗口下视频优先占满空间，检查器可从工具栏弹出
 
 ## English
 
@@ -19,6 +20,7 @@ CamDesk is a native macOS IP camera viewer and local recorder. It supports RTSP 
 - ONVIF discovery, PTZ, and presets
 - Snapshots, stream-copy recording, and local playback
 - Digital zoom, audio monitoring, and system appearance
+- At narrow widths, the inspector gets out of the way and remains available from the toolbar
 
 ## Requirements
 

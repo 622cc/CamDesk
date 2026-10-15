@@ -7,18 +7,26 @@ struct ContentView: View {
     @EnvironmentObject var store: AppStore
     @CamDeskState private var booted = false
     @CamDeskState private var columnVisibility: NavigationSplitViewVisibility = .all
+    @CamDeskState private var compactInspectorPresented = false
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             Sidebar().environmentObject(store)
                 .navigationSplitViewColumnWidth(min: 180, ideal: 210, max: 320)
         } detail: {
-            Group {
-                if store.section == "library" { LibraryView() } else { ViewerScreen() }
+            GeometryReader { geometry in
+                let compact = geometry.size.width < 900
+                Group {
+                    if store.section == "library" { LibraryView() }
+                    else { ViewerScreen(compact: compact) }
+                }
+                .navigationTitle(store.section == "library" ? "录像与截图" : (store.selected?.name ?? "摄像头"))
+                .navigationSubtitle(subtitle)
+                .toolbar { toolbarContent(compact: compact) }
+                .onChange(of: compact) { _, isCompact in
+                    if !isCompact { compactInspectorPresented = false }
+                }
             }
-            .navigationTitle(store.section == "library" ? "录像与截图" : (store.selected?.name ?? "摄像头"))
-            .navigationSubtitle(subtitle)
-            .toolbar { toolbarContent }
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .task { if !booted { booted = true; store.startSavedCameras(); store.refreshLibrary() } }
@@ -32,7 +40,6 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .camDeskFullscreen)) { _ in NSApp.keyWindow?.toggleFullScreen(nil) }
     }
 
-    // Window subtitle: state that belongs to the window, not a banner in the content area.
     private var subtitle: String {
         guard let camera = store.selected, store.section != "library" else { return "\(store.cameras.count) 台摄像头" }
         if let player = store.players[camera.id] {
@@ -42,7 +49,7 @@ struct ContentView: View {
         return camera.hostHint
     }
 
-    @ToolbarContentBuilder private var toolbarContent: some ToolbarContent {
+    @ToolbarContentBuilder private func toolbarContent(compact: Bool) -> some ToolbarContent {
         ToolbarItemGroup {
             if store.section != "library" {
                 Picker("观看方式", selection: $store.focusedView) {
@@ -53,11 +60,23 @@ struct ContentView: View {
                 .labelsHidden()
                 .frame(width: 78)
                 .help("单画面或多画面观看")
-                Button { store.controlsVisible.toggle() } label: {
+                Button {
+                    if compact { compactInspectorPresented.toggle() }
+                    else { store.controlsVisible.toggle() }
+                } label: {
                     Label("检查器", systemImage: "sidebar.trailing")
                 }
-                .help(store.controlsVisible ? "隐藏检查器" : "显示检查器")
+                .help(compact
+                      ? (compactInspectorPresented ? "隐藏检查器" : "显示检查器")
+                      : (store.controlsVisible ? "隐藏检查器" : "显示检查器"))
                 .disabled(store.selected == nil)
+                .popover(isPresented: $compactInspectorPresented, arrowEdge: .bottom) {
+                    if let camera = store.selected {
+                        Inspector(camera: camera)
+                            .environmentObject(store)
+                            .frame(width: 300, height: 500)
+                    }
+                }
             }
         }
         ToolbarItem(placement: .primaryAction) {
@@ -151,6 +170,7 @@ struct SidebarCameraRow: View {
 
 struct ViewerScreen: View {
     @EnvironmentObject var store: AppStore
+    let compact: Bool
     var body: some View {
         if store.cameras.isEmpty {
             ContentUnavailableView {
@@ -163,16 +183,15 @@ struct ViewerScreen: View {
                 Button("添加本地演示源") { store.addDemo() }
             }
         } else if store.focusedView, let camera = store.selected, let player = store.players[camera.id] {
-            HSplitView {
-                VStack(spacing: 0) {
-                    SelectedCameraActions(camera: camera, player: player)
-                    Divider()
-                    ZoomVideoSurface(player: player, zoom: $store.viewZoom)
-                }
-                .frame(minWidth: 420)
-                if store.controlsVisible {
-                    Inspector(camera: camera)
-                        .frame(minWidth: 240, idealWidth: 260, maxWidth: 320)
+            if compact {
+                livePane(camera: camera, player: player)
+            } else {
+                HSplitView {
+                    livePane(camera: camera, player: player).frame(minWidth: 420)
+                    if store.controlsVisible {
+                        Inspector(camera: camera)
+                            .frame(minWidth: 240, idealWidth: 260, maxWidth: 320)
+                    }
                 }
             }
         } else {
@@ -185,6 +204,14 @@ struct ViewerScreen: View {
                 .padding(16)
             }
             .background(Color(nsColor: .underPageBackgroundColor))
+        }
+    }
+
+    private func livePane(camera: CameraRecord, player: CameraPlayer) -> some View {
+        VStack(spacing: 0) {
+            SelectedCameraActions(camera: camera, player: player)
+            Divider()
+            ZoomVideoSurface(player: player, zoom: $store.viewZoom)
         }
     }
 }

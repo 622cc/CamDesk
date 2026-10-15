@@ -6,7 +6,7 @@ import AppKit
     @NSApplicationDelegateAdaptor(CamDeskDelegate.self) var delegate
     var body: some Scene {
         WindowGroup("摄像头") {
-            ContentView().environmentObject(store).frame(minWidth:850,minHeight:560)
+            ContentView().environmentObject(store).frame(minWidth:560,minHeight:400)
                 .onAppear { delegate.store = store }
         }
         .defaultSize(width:1280,height:800)
