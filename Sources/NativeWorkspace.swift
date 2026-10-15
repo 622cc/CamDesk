@@ -61,8 +61,13 @@ struct ContentView: View {
             }
         }
         ToolbarItem(placement: .primaryAction) {
-            Button { store.editDraft = CameraDraft() } label: { Label("添加摄像头", systemImage: "plus") }
-                .help("添加摄像头或发现局域网设备")
+            Menu {
+                Button("手动添加摄像头…") { store.editDraft = CameraDraft() }
+                Button("发现局域网 ONVIF 设备…") { store.discoverVisible = true }
+                Divider()
+                Button("添加本地演示源") { store.addDemo() }
+            } label: { Label("添加摄像头", systemImage: "plus") }
+                .help("手动添加摄像头或发现局域网设备")
         }
     }
 }

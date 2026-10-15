@@ -1,8 +1,24 @@
 # CamDesk
 
-CamDesk is a native macOS viewer for IP cameras. It supports RTSP preview, ONVIF pan/tilt controls, snapshots and local recording.
+[简体中文](#简体中文) · [English](#english)
 
-Pick a camera from the sidebar to view it. Use the inspector for digital zoom and camera controls. Recordings use MKV and keep the camera's original video stream. On cameras that only allow one RTSP client, recording temporarily takes over that connection and the live preview resumes when recording stops; audio monitoring pauses during that time.
+## 简体中文
+
+CamDesk 是一款原生 macOS IP 摄像头查看与本地录像工具。它支持 RTSP 视频、ONVIF 云台、截图和 MKV 录像，摄像头配置保存在本机。
+
+- 单画面和多画面观看
+- ONVIF 设备发现、云台和预置位
+- 截图、原码录像及本地回放
+- 视频缩放、音频监听和系统浅色/深色外观
+
+## English
+
+CamDesk is a native macOS IP camera viewer and local recorder. It supports RTSP video, ONVIF PTZ, snapshots, and MKV recording. Camera settings stay on your Mac.
+
+- Single-camera and multi-camera viewing
+- ONVIF discovery, PTZ, and presets
+- Snapshots, stream-copy recording, and local playback
+- Digital zoom, audio monitoring, and system appearance
 
 ## Requirements
 
