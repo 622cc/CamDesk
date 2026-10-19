@@ -75,6 +75,16 @@ The integration tests start synthetic RTSP, MJPEG, HLS and ONVIF services on loo
 
 For the ONVIF and video protocol coverage and current hardware test status, see [TESTING.md](TESTING.md).
 
+## Working on CamDesk
+
+Read [AGENTS.md](AGENTS.md) first. Every change must do all three of these before it counts as done:
+
+1. **Install over the local copy.** Build, then replace `/Applications/CamDesk.app` and confirm the version and binary hash match the new build.
+2. **Update the handover.** Append an entry to the change log in [HANDOVER.md](HANDOVER.md) with what changed, why, how it was verified, and how to roll back.
+3. **Push to GitHub.** Commit and push to `origin/main`, and upload the disk image when the version changes.
+
+[HANDOVER.md](HANDOVER.md) is the current-state snapshot: install path, release artifacts, architecture decisions, and known limits.
+
 ## Limits
 
 CamDesk is a local viewer and recorder. It has no cloud relay, cloud recording, iCloud sync, HomeKit integration, motion alerts, push notifications or two-way talk. PTZ controls require an ONVIF camera that exposes a PTZ service. Camera firmware and stream settings vary, so test with the model you use.
