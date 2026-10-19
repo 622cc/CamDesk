@@ -27,7 +27,7 @@ struct CameraDraft: Identifiable {
     init(camera: CameraRecord = CameraRecord(name: "新摄像头"), connection: ConnectionSecrets = ConnectionSecrets()) { self.camera = camera; self.connection = connection }
 }
 struct Preferences: Codable {
-    var ffmpegPath = "/opt/homebrew/bin/ffmpeg"
+    var ffmpegPath = FFmpegLocator.discover()
     var captureDirectory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Movies/CamDesk").path
 }
 struct ArchiveCamera: Codable {

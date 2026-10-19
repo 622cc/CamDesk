@@ -2,6 +2,7 @@
 .build/
 build/
 dist/
+!dist/*.dmg.sha256
 .swiftpm/
 Tests/artifacts/
 *.dSYM/

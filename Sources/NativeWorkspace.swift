@@ -172,7 +172,9 @@ struct ViewerScreen: View {
     @EnvironmentObject var store: AppStore
     let compact: Bool
     var body: some View {
-        if store.cameras.isEmpty {
+        if !FFmpegLocator.isExecutable(store.preferences.ffmpegPath) {
+            FFmpegSetupView()
+        } else if store.cameras.isEmpty {
             ContentUnavailableView {
                 Label("还没有摄像头", systemImage: "video.badge.plus")
             } description: {
@@ -395,6 +397,77 @@ struct AudioControls: View {
         LabeledContent("音量") {
             Slider(value: $player.volume, in: 0...1).frame(width: 120).accessibilityLabel("监听音量").disabled(!player.isAudioEnabled)
         }
+    }
+}
+
+// First-run guidance: a missing FFmpeg means nothing can play, so say so plainly
+// instead of showing a black frame. layout.md › Best practices.
+struct FFmpegSetupView: View {
+    @EnvironmentObject var store: AppStore
+    @CamDeskState private var draftPath = FFmpegLocator.discover()
+    @CamDeskState private var detected: String?
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 36, weight: .light))
+                .foregroundStyle(.secondary)
+            Text("需要 FFmpeg 才能播放画面")
+                .font(.title3.weight(.semibold))
+            Text("CamDesk 通过本机的 FFmpeg 解码视频。系统里没有找到可用的 FFmpeg，装好之后再回来。")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 420)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("终端安装（任选一种）").font(.callout.weight(.medium))
+                Text("brew install ffmpeg").font(.system(.callout, design: .monospaced)).textSelection(.enabled)
+                Text("或从 ffmpeg.org 下载静态构建，解压后把路径填到下面。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(12)
+            .frame(maxWidth: 420, alignment: .leading)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+
+            HStack(spacing: 8) {
+                TextField("FFmpeg 可执行文件路径", text: $draftPath)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 300)
+                Button("浏览…") { chooseBinary() }
+                Button("检查") { verify() }
+            }
+            if let detected {
+                Label(detected, systemImage: "checkmark.circle")
+                    .font(.callout)
+                    .foregroundStyle(.green)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(32)
+        .onAppear { verify(silent: true) }
+    }
+
+    private func chooseBinary() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.message = "选择 ffmpeg 可执行文件"
+        panel.directoryURL = URL(fileURLWithPath: "/opt/homebrew/bin")
+        if panel.runModal() == .OK, let url = panel.url { draftPath = url.path; verify() }
+    }
+
+    private func verify(silent: Bool = false) {
+        guard FFmpegLocator.isExecutable(draftPath) else {
+            if !silent { store.issue = AppIssue(message: "这个路径下没有可执行的 FFmpeg。") }
+            return
+        }
+        detected = FFmpegLocator.version(of: draftPath) ?? "已找到 FFmpeg"
+        store.preferences.ffmpegPath = draftPath
+        store.savePreferences()
     }
 }
 

@@ -56,7 +56,14 @@ Camera use needs FFmpeg installed on the Mac that runs CamDesk; the disk image d
 
 Add an RTSP or HTTP stream URL. Enter camera credentials in the separate username and password fields; CamDesk stores them in Keychain. For ONVIF, add the device service URL and choose **Read profiles**. Local discovery finds ONVIF devices that respond to WS-Discovery on the same network.
 
-RTSP and ONVIF credentials are passed to the FFmpeg process when a connection is opened. Other processes running as the same macOS user may be able to inspect process arguments while connected. Use a dedicated camera account and avoid running untrusted software in the same login session.
+RTSP and ONVIF credentials are passed to the FFmpeg process when a connection is opened. This is a hard limitation of FFmpeg: its RTSP demuxer has no `-user`/`-password` options, so the URL is the only place a credential can go, and the URL is a process argument. CamDesk cannot hide it without patching FFmpeg.
+
+Practical consequences, stated plainly:
+
+- Any process running as **the same macOS user** can read the argument with `ps` while a camera is connected.
+- Other users on the machine, and anything outside that login session, cannot.
+
+Mitigations that do work: use a camera account with narrower privileges than the admin account, keep sensitive cameras on a separate login, and stop the stream when finished. Do not run untrusted software in the same login session as CamDesk.
 
 ## Tests
 

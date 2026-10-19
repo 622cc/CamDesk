@@ -10,7 +10,7 @@ if [[ -z "$FFMPEG_PATH" || -z "$FFPROBE_PATH" ]]; then
 fi
 SDK="$(/usr/bin/xcrun --show-sdk-path)"
 TARGET=arm64-apple-macosx14.0
-COMMON=(Sources/Compatibility.swift Sources/Models.swift Sources/MediaEngine.swift Sources/ONVIF.swift Sources/VideoZoom.swift)
+COMMON=(Sources/Compatibility.swift Sources/FFmpegLocator.swift Sources/Models.swift Sources/MediaEngine.swift Sources/ONVIF.swift Sources/VideoZoom.swift)
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/camdesk-tests.XXXXXX")"
 export FFPROBE_PATH CAMDESK_TEST_OUTPUT="$TMP/output" CAMDESK_FIXTURE_ROOT="$TMP/fixtures"
 mkdir -p "$CAMDESK_TEST_OUTPUT" "$CAMDESK_FIXTURE_ROOT"
@@ -33,7 +33,7 @@ compile_run() {
   /usr/bin/xcrun swiftc -swift-version 5 -target "$TARGET" -sdk "$SDK" "$@" -o "$TMP/$name"
   "$TMP/$name"
 }
-compile_run MediaEngineTests Sources/MediaEngine.swift Tests/MediaEngineTests.swift
+compile_run MediaEngineTests Sources/FFmpegLocator.swift Sources/MediaEngine.swift Tests/MediaEngineTests.swift
 compile_run ONVIFTests Sources/ONVIF.swift Tests/ONVIFTests.swift
 compile_run ModelTests "${COMMON[@]}" Tests/ModelTests.swift
 
@@ -58,5 +58,5 @@ done
 /usr/bin/curl --silent --fail http://127.0.0.1:19855/health >/dev/null
 /usr/bin/curl --silent --fail http://127.0.0.1:19856/health >/dev/null
 compile_run ONVIFIntegrationTests Sources/ONVIF.swift Tests/ONVIFIntegrationTests.swift
-compile_run NetworkMediaTests Sources/MediaEngine.swift Tests/NetworkMediaTests.swift
+compile_run NetworkMediaTests Sources/FFmpegLocator.swift Sources/MediaEngine.swift Tests/NetworkMediaTests.swift
 printf '\nAll CamDesk tests passed.\n'

@@ -13,7 +13,7 @@ struct StreamConfiguration {
     var useTCP: Bool
     var isDemo: Bool
     var ffmpegPath: String
-    init(id: UUID = UUID(), name: String = "Camera", url: String = "", username: String = "", password: String = "", useTCP: Bool = true, isDemo: Bool = false, ffmpegPath: String = "/opt/homebrew/bin/ffmpeg") {
+    init(id: UUID = UUID(), name: String = "Camera", url: String = "", username: String = "", password: String = "", useTCP: Bool = true, isDemo: Bool = false, ffmpegPath: String = FFmpegLocator.discover()) {
         self.id = id; self.name = name; self.url = url; self.username = username; self.password = password
         self.useTCP = useTCP; self.isDemo = isDemo; self.ffmpegPath = ffmpegPath
     }
