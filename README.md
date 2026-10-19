@@ -40,13 +40,17 @@ Existing CamDesk installations using Bundle ID `local.camdesk.mac` are migrated 
 open build/CamDesk.app
 ```
 
+`build.sh` also writes `dist/CamDesk-<version>-arm64.dmg` and its `.sha256` checksum. Open the disk image and drag CamDesk to Applications.
+
 To build the executable with Swift Package Manager:
 
 ```sh
 swift build
 ```
 
-`build.sh` creates a local ad-hoc-signed app. It is not notarized.
+Builds are ad-hoc signed and not notarized, because notarization needs an Apple Developer ID. A downloaded copy is therefore quarantined by Gatekeeper. To open it once: right-click CamDesk in Applications and choose Open, or run `xattr -d com.apple.quarantine /Applications/CamDesk.app`. Builders with a Developer ID can pass it in: `CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" ./build.sh`.
+
+Camera use needs FFmpeg installed on the Mac that runs CamDesk; the disk image does not include it.
 
 ## Add a camera
 
