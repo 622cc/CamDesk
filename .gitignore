@@ -9,3 +9,7 @@ Tests/artifacts/
 xcuserdata/
 __pycache__/
 *.py[cod]
+
+# Local working notes, never published
+AGENTS.md
+HANDOVER.md

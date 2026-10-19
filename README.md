@@ -77,13 +77,7 @@ For the ONVIF and video protocol coverage and current hardware test status, see 
 
 ## Working on CamDesk
 
-Read [AGENTS.md](AGENTS.md) first. Every change must do all three of these before it counts as done:
-
-1. **Install over the local copy.** Build, then replace `/Applications/CamDesk.app` and confirm the version and binary hash match the new build.
-2. **Update the handover.** Append an entry to the change log in [HANDOVER.md](HANDOVER.md) with what changed, why, how it was verified, and how to roll back.
-3. **Push to GitHub.** Commit and push to `origin/main`, and upload the disk image when the version changes.
-
-[HANDOVER.md](HANDOVER.md) is the current-state snapshot: install path, release artifacts, architecture decisions, and known limits.
+Every change ships in three steps: build and install over the local copy, update the handover notes, then commit and push. Release disk images go to GitHub Releases.
 
 ## Limits
 
