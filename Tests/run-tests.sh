@@ -34,6 +34,7 @@ compile_run() {
   "$TMP/$name"
 }
 compile_run FFmpegGateTests Sources/FFmpegLocator.swift Tests/FFmpegGateTests.swift
+compile_run ReleaseNotesTests Sources/ReleaseNotesView.swift Tests/ReleaseNotesTests.swift
 compile_run MediaEngineTests Sources/FFmpegLocator.swift Sources/MediaEngine.swift Tests/MediaEngineTests.swift
 compile_run VideoZoomTests "${COMMON[@]}" Tests/VideoZoomTests.swift
 compile_run ONVIFTests Sources/ONVIF.swift Tests/ONVIFTests.swift

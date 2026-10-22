@@ -4,6 +4,7 @@ import AppKit
 @main struct CamDeskApp: App {
     @StateObject private var store = AppStore()
     @NSApplicationDelegateAdaptor(CamDeskDelegate.self) var delegate
+    @CamDeskState private var showsReleaseNotes = false
     var body: some Scene {
         WindowGroup("摄像头") {
             ContentView().environmentObject(store).frame(minWidth:560,minHeight:400)
@@ -12,6 +13,10 @@ import AppKit
         .defaultSize(width:1280,height:800)
         .windowToolbarStyle(.unified)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("更新日志") { showsReleaseNotes = true }
+                    .keyboardShortcut("l", modifiers: [.command, .option])
+            }
             CommandGroup(replacing:.newItem) {
                 Button("添加摄像头") { store.editDraft=CameraDraft() }.keyboardShortcut("n")
                 Button("发现 ONVIF 设备") { store.discoverVisible=true }.keyboardShortcut("d",modifiers:[.command,.shift])
@@ -50,7 +55,16 @@ import AppKit
             }
         }
         Settings {PreferencesView().environmentObject(store).frame(width:660,height:600)}
+        Window("更新日志", id: "release-notes") {
+            ReleaseNotesView().frame(minWidth: 480, minHeight: 360)
+        }
+        .defaultSize(width: 620, height: 560)
+        .onChange(of: showsReleaseNotes) { _, open in
+            if open { openReleaseNotes(); showsReleaseNotes = false }
+        }
     }
+    @Environment(\.openWindow) private var openWindow
+    private func openReleaseNotes() { openWindow(id: "release-notes"); NSApp.activate(ignoringOtherApps: true) }
 }
 private struct RecordingCommand: View {
     @EnvironmentObject var store: AppStore

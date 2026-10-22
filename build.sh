@@ -15,6 +15,7 @@ mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources"
 if [ -f "$PROJECT_ROOT/Resources/AppIcon.icns" ]; then
   /bin/cp "$PROJECT_ROOT/Resources/AppIcon.icns" "$APP_PATH/Contents/Resources/AppIcon.icns"
 fi
+/bin/cp "$PROJECT_ROOT/CHANGELOG.md" "$APP_PATH/Contents/Resources/CHANGELOG.md"
 
 # Developer ID when supplied, otherwise a local ad-hoc signature.
 SIGN_ID="${CODESIGN_IDENTITY:--}"
