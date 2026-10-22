@@ -10,7 +10,8 @@ CamDesk 是一款原生 macOS IP 摄像头查看与本地录像工具。它支�
 - ONVIF 设备发现、云台和预置位
 - 截图、原码录像及本地回放
 - 视频缩放、音频监听和系统浅色/深色外观
-- 窄窗口下视频优先占满空间，检查器可从工具栏弹出
+- 窄窗口下视频优先占满空间，检查器可从工具栏或快捷键打开
+- 收藏与搜索筛选、连接取消、录像保存进度和失败重试
 
 ## English
 
@@ -20,7 +21,8 @@ CamDesk is a native macOS IP camera viewer and local recorder. It supports RTSP 
 - ONVIF discovery, PTZ, and presets
 - Snapshots, stream-copy recording, and local playback
 - Digital zoom, audio monitoring, and system appearance
-- At narrow widths, the inspector gets out of the way and remains available from the toolbar
+- At narrow widths, open the inspector from the toolbar or its keyboard shortcut
+- Favorites and search filters, cancellable connections, and recording save status with retry
 
 ## Requirements
 
@@ -60,8 +62,8 @@ RTSP and ONVIF credentials are passed to the FFmpeg process when a connection is
 
 Practical consequences, stated plainly:
 
-- Any process running as **the same macOS user** can read the argument with `ps` while a camera is connected.
-- Other users on the machine, and anything outside that login session, cannot.
+- Processes running as **the same macOS user** can read the argument with `ps` while a camera is connected.
+- Visibility to other local users depends on the host's process inspection permissions; do not treat process arguments as private storage.
 
 Mitigations that do work: use a camera account with narrower privileges than the admin account, keep sensitive cameras on a separate login, and stop the stream when finished. Do not run untrusted software in the same login session as CamDesk.
 
@@ -74,10 +76,6 @@ Mitigations that do work: use a camera account with narrower privileges than the
 The integration tests start synthetic RTSP, MJPEG, HLS and ONVIF services on loopback only. They use generated color bars and fake credentials; they do not read camera accounts or connect to physical devices. Tests write temporary media under the system temporary directory. The Keychain test creates and removes an item with a random identifier.
 
 For the ONVIF and video protocol coverage and current hardware test status, see [TESTING.md](TESTING.md).
-
-## Working on CamDesk
-
-Every change ships in three steps: build and install over the local copy, update the handover notes, then commit and push. Release disk images go to GitHub Releases.
 
 ## Limits
 

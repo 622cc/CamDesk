@@ -13,18 +13,68 @@ struct VideoSurface: View {
             ZStack {
                 Color.black
                 if let image=player.image {Image(nsImage:image).resizable().scaledToFit().frame(width:geometry.size.width,height:geometry.size.height)}
-                else {VStack(spacing:11){Image(systemName:"video.slash").font(.system(size:30,weight:.ultraLight));Text(player.status).font(.system(size:11))}.foregroundStyle(Color.white.opacity(0.8))}
+                else {VStack(spacing:11){Image(systemName:"video.slash").font(.system(size:30));Text(player.status).font(.callout)}.foregroundStyle(Color.white.opacity(0.8))}
+                MediaStatusOverlay(player: player, showsActions: false)
             }
         }
     }
 }
+struct MediaStatusOverlay: View {
+    @ObservedObject var player: CameraPlayer
+    var showsActions = true
+    var body: some View {
+        if player.isConnecting || player.isFinalizingRecording || player.errorMessage != nil || player.recordingError != nil {
+            MediaStatusFeedback(player: player, showsActions: showsActions)
+                .padding(10)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                .padding(10)
+        }
+    }
+}
+
+struct MediaStatusFeedback: View {
+    @ObservedObject var player: CameraPlayer
+    var showsActions = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let error = player.recordingError ?? player.errorMessage {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("\(player.recordingError != nil ? "录像错误" : "连接错误")：\(error)")
+                if showsActions {
+                    if player.recordingError != nil {
+                        Text("请检查保存位置后重试录像。")
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if !player.isConnecting {
+                        Button("重新连接") { player.reconnect() }
+                    }
+                }
+            }
+            if player.isConnecting {
+                HStack {
+                    ProgressView().controlSize(.small).accessibilityLabel("正在连接")
+                    Text("连接中…")
+                    if showsActions { Button("取消连接") { player.stop() } }
+                }
+            }
+            if player.isFinalizingRecording {
+                Label("录像保存中…", systemImage: "hourglass")
+            }
+        }
+        .font(.callout)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 struct LibraryView:View {
     @EnvironmentObject var store:AppStore
     @CamDeskState private var filter="全部"
     var items:[LibraryItem]{store.library.filter{filter=="全部" || (filter=="录像" ? $0.isVideo:!$0.isVideo)}}
     var body:some View {
         VStack(alignment:.leading,spacing:20) {
-            HStack {VStack(alignment:.leading,spacing:4){Text("录像与截图").font(.headline);Text("保存在你选择的本机文件夹").font(.callout).foregroundStyle(.secondary)};Spacer();Button("打开文件夹"){store.reveal(URL(fileURLWithPath:store.preferences.captureDirectory))};Button{store.refreshLibrary()}label:{Image(systemName:"arrow.clockwise").frame(width:28,height:28)}}
+            HStack {VStack(alignment:.leading,spacing:4){Text("录像与截图").font(.headline);Text("保存在你选择的本机文件夹").font(.callout).foregroundStyle(.secondary)};Spacer();Button("打开文件夹"){store.reveal(URL(fileURLWithPath:store.preferences.captureDirectory))};Button{store.refreshLibrary()}label:{Image(systemName:"arrow.clockwise").frame(width:28,height:28)}.accessibilityLabel("刷新录像与截图")}
             Picker("类型",selection:$filter){Text("全部").tag("全部");Text("录像").tag("录像");Text("截图").tag("截图")}.pickerStyle(.segmented).frame(width:240)
             if items.isEmpty {VStack(spacing:15){Image(systemName:"photo.on.rectangle.angled").font(.system(size:38,weight:.ultraLight)).foregroundStyle(mint);Text("这里将保存你的录像与截图");Text("在实时画面上方，点击截图或录像按钮开始。").font(.callout).foregroundStyle(.secondary)}.frame(maxWidth:.infinity,maxHeight:.infinity)}
             else {List {ForEach(items){item in HStack(spacing:14){Image(systemName:item.isVideo ? "play.rectangle":"photo").font(.title3).foregroundStyle(.tint).frame(width:34,height:34);VStack(alignment:.leading,spacing:5){Text(item.url.lastPathComponent).font(.body).lineLimit(1);Text("\(item.created.formatted(date:.abbreviated,time:.shortened)) · \(item.sizeLabel)").font(.callout).foregroundStyle(.secondary)};Spacer();Button(item.isVideo ? "播放":"查看"){if item.isVideo{store.playback=item}else{NSWorkspace.shared.open(item.url)}};Button{store.reveal(item.url)}label:{Image(systemName:"folder")}.help("在 Finder 中显示")}.padding(12)}}}

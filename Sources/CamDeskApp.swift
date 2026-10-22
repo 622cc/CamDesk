@@ -28,7 +28,11 @@ import AppKit
                 Button("断开全部") { store.disconnectAll() }
                 Divider()
                 Button("保存截图") { if let camera=store.selected {store.snapshot(camera)} }.keyboardShortcut("s",modifiers:[.command,.shift]).disabled(store.selected==nil)
-                Button("开始／停止录像") { if let camera=store.selected {store.toggleRecording(camera)} }.keyboardShortcut("r",modifiers:[.command,.shift]).disabled(store.selected==nil)
+                if let camera = store.selected, let player = store.players[camera.id] {
+                    RecordingCommand(camera: camera, player: player).environmentObject(store)
+                } else {
+                    Button("开始／停止录像") {}.keyboardShortcut("r",modifiers:[.command,.shift]).disabled(true)
+                }
                 Button("监听／静音") {if let id=store.selectedID,let p=store.players[id]{store.toggleAudio(p)}}.disabled(store.selected==nil)
                 Button("打开录像文件夹") {store.reveal(URL(fileURLWithPath:store.preferences.captureDirectory))}
                 Divider()
@@ -38,7 +42,7 @@ import AppKit
                 Button("显示／隐藏侧栏") {NotificationCenter.default.post(name:.camDeskToggleSidebar,object:nil)}.keyboardShortcut("s",modifiers:[.command,.control])
                 Button("单画面观看") {store.section="live";store.focusedView=true}.keyboardShortcut("1")
                 Button("多画面观看") {store.section="live";store.focusedView=false}.keyboardShortcut("2")
-                Button("显示／隐藏云台控制") {store.controlsVisible.toggle()}.keyboardShortcut("i",modifiers:[.command,.option])
+                Button("显示／隐藏检查器") {NotificationCenter.default.post(name:.camDeskToggleInspector,object:nil)}.keyboardShortcut("i",modifiers:[.command,.option]).disabled(store.selected==nil || store.section=="library")
                 Button("放大画面") {store.viewZoom=VideoZoom.stepped(store.viewZoom,up:true)}.keyboardShortcut("+").disabled(store.selected==nil)
                 Button("缩小画面") {store.viewZoom=VideoZoom.stepped(store.viewZoom,up:false)}.keyboardShortcut("-").disabled(store.selected==nil)
                 Button("还原画面") {store.viewZoom=1}.keyboardShortcut("0").disabled(store.selected==nil)
@@ -48,6 +52,19 @@ import AppKit
         Settings {PreferencesView().environmentObject(store).frame(width:660,height:600)}
     }
 }
+private struct RecordingCommand: View {
+    @EnvironmentObject var store: AppStore
+    let camera: CameraRecord
+    @ObservedObject var player: CameraPlayer
+    var body: some View {
+        Button(player.isFinalizingRecording ? "录像保存中…" : (player.isRecording ? "停止录像" : "开始录像")) {
+            store.toggleRecording(camera)
+        }
+        .keyboardShortcut("r", modifiers: [.command, .shift])
+        .disabled(player.isFinalizingRecording || (!player.isConnected && !player.isRecording))
+    }
+}
+
 final class CamDeskDelegate: NSObject, NSApplicationDelegate {
     weak var store: AppStore?
     func applicationDidFinishLaunching(_ notification:Notification) { NSApp.setActivationPolicy(.regular);NSApp.activate(ignoringOtherApps:true) }

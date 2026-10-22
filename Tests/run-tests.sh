@@ -33,9 +33,12 @@ compile_run() {
   /usr/bin/xcrun swiftc -swift-version 5 -target "$TARGET" -sdk "$SDK" "$@" -o "$TMP/$name"
   "$TMP/$name"
 }
+compile_run FFmpegGateTests Sources/FFmpegLocator.swift Tests/FFmpegGateTests.swift
 compile_run MediaEngineTests Sources/FFmpegLocator.swift Sources/MediaEngine.swift Tests/MediaEngineTests.swift
+compile_run VideoZoomTests "${COMMON[@]}" Tests/VideoZoomTests.swift
 compile_run ONVIFTests Sources/ONVIF.swift Tests/ONVIFTests.swift
 compile_run ModelTests "${COMMON[@]}" Tests/ModelTests.swift
+compile_run StoreBehaviorTests "${COMMON[@]}" Tests/StoreBehaviorTests.swift
 
 "$FFMPEG_PATH" -hide_banner -loglevel error -f lavfi -i testsrc2=size=640x360:rate=12 \
   -t 3 -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p \

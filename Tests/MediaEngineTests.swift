@@ -21,6 +21,79 @@ import Darwin
             print(error.localizedDescription); exit(1)
         }
     }
+    @MainActor static func sessionRegressions(root: URL) async throws {
+        let script = root.appendingPathComponent("fake-ffmpeg")
+        let lock = root.appendingPathComponent("session.lock")
+        let overlap = root.appendingPathComponent("overlap")
+        let exitCode = root.appendingPathComponent("exit-code")
+        let source = """
+        #!/usr/bin/env python3
+        import os, sys, time, select
+        from pathlib import Path
+        root = Path(__file__).parent
+        lock = root / "session.lock"
+        try: lock.mkdir()
+        except FileExistsError:
+            (root / "overlap").write_text("overlap")
+            sys.exit(183)
+        frame = (root / "snapshot.jpg").read_bytes()
+        recording = "matroska" in sys.argv
+        try:
+            while True:
+                os.write(1, frame)
+                if select.select([sys.stdin], [], [], 0.05)[0]:
+                    sys.stdin.readline()
+                    time.sleep(0.4)
+                    break
+        finally:
+            lock.rmdir()
+        sys.exit(int((root / "exit-code").read_text()) if recording else 0)
+        """
+        try source.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        try "0".write(to: exitCode, atomically: true, encoding: .utf8)
+        let player = CameraPlayer(configuration: StreamConfiguration(url: "rtsp://127.0.0.1/fixture", ffmpegPath: script.path))
+        defer { player.stop() }
+        player.start()
+        try require(player.isConnecting, "connecting published before first frame")
+        let connected = await wait(seconds: 5) { player.isConnected }
+        try require(connected, "non-demo fake preview connects")
+        let old = player.ownedProcessIDs
+        player.stop(); player.reconnect()
+        let reconnected = await wait(seconds: 5) { player.isConnected && old.allSatisfy { kill($0, 0) != 0 } }
+        try require(reconnected && player.ownedProcessIDs.count == 1, "immediate reconnect waits old preview exit")
+        try player.startRecording(to: root.appendingPathComponent("cancelled.mkv"))
+        player.stopRecording(); player.stop(); player.reconnect()
+        player.update(configuration: StreamConfiguration(url: "rtsp://127.0.0.1/updated", ffmpegPath: script.path))
+        let updated = await wait(seconds: 5) { player.isConnected && !player.isRecording && !player.isFinalizingRecording }
+        try require(updated && player.ownedProcessIDs.count == 1, "pending recording cancellation and update restore only one preview")
+        var results: [Bool] = []
+        player.onRecordingFinished = { _, success in results.append(success) }
+        try player.startRecording(to: root.appendingPathComponent("fake-recording.mkv"))
+        let recording = await wait(seconds: 5) { player.isConnected && player.status == "录制中" }
+        try require(recording && player.ownedProcessIDs.count == 1, "non-demo recording takes single session after preview exits")
+        player.stopRecording()
+        try require(player.isFinalizingRecording && results.isEmpty, "tail keeps finalizing and no premature finish callback")
+        do {
+            try player.startRecording(to: root.appendingPathComponent("duplicate.mkv"))
+            throw MediaEngineError.message("TEST FAILED: duplicate recording allowed during finalization")
+        } catch { try require(error.localizedDescription.contains("请稍候"), "duplicate recording rejected in tail") }
+        let finalized = await wait(seconds: 5) { !player.isFinalizingRecording && player.isConnected && results == [true] }
+        try require(finalized, "zero exit completes and restores preview")
+        try "7".write(to: exitCode, atomically: true, encoding: .utf8)
+        try player.startRecording(to: root.appendingPathComponent("failed.mkv"))
+        let secondStarted = await wait(seconds: 5) { player.status == "录制中" }
+        try require(secondStarted, "second non-demo recording starts")
+        player.stopRecording(); player.stop(); player.reconnect()
+        let failed = await wait(seconds: 5) { player.isConnected && results == [true, false] }
+        try require(failed && player.recordingError?.contains("7") == true && player.status != "录像已保存", "nonzero exit stays visible after preview recovery")
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        try require(player.ownedProcessIDs.count == 1 && !FileManager.default.fileExists(atPath: overlap.path), "rapid stop/reconnect never overlaps or resurrects preview")
+        let ids = player.ownedProcessIDs; player.stop()
+        let clean = await wait(seconds: 5) { ids.allSatisfy { kill($0, 0) != 0 } && !FileManager.default.fileExists(atPath: lock.path) }
+        try require(clean, "non-demo session cleanup")
+        print("PASS: non-demo single session handoff, cancellation, finalization and real exit reporting")
+    }
     @MainActor static func run() async throws {
         var parser = JPEGStreamParser(maximumFrameSize: 32)
         let a = Data([0xff,0xd8,1,2,0xff,0xd9])
@@ -53,13 +126,20 @@ import Darwin
         let bitmap = NSBitmapImageRep(data: try Data(contentsOf: snapshot))
         try require(bitmap != nil && bitmap!.pixelsWide > 0, "snapshot JPEG decodes")
         print("PASS: actual FFmpeg demo first frame and atomic JPEG snapshot")
+        try await sessionRegressions(root: root)
+        let originalPreview = player.ownedProcessIDs
         let movie = root.appendingPathComponent("recording.mkv")
         try player.startRecording(to: movie)
         try require(player.isRecording, "recording starts")
+        let started = await wait(seconds: 3) { player.ownedProcessIDs.count == 2 }
+        try require(started, "demo recording process launches asynchronously")
         let recordingPIDs = player.ownedProcessIDs
         try? await Task.sleep(nanoseconds: 2_500_000_000)
         player.stopRecording()
-        let finalized = await wait(seconds: 7) { recordingPIDs.dropFirst().allSatisfy { kill($0, 0) != 0 } }
+        try require(player.isFinalizingRecording && !player.isRecording, "recording remains finalizing until actual exit")
+        let finalized = await wait(seconds: 7) { !player.isFinalizingRecording && recordingPIDs.dropFirst().allSatisfy { kill($0, 0) != 0 } }
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        try require(player.ownedProcessIDs == originalPreview, "demo stop recording preserves original preview without leaking replacement")
         try require(finalized, "recording process exits after stdin q")
         let probe = Process(); let pipe = Pipe()
         probe.executableURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FFPROBE_PATH"] ?? "/opt/homebrew/bin/ffprobe")
@@ -95,7 +175,8 @@ import Darwin
         try require(player.ownedProcessIDs.isEmpty, "stop prevents stale reconnect")
         let invalid = CameraPlayer(configuration: StreamConfiguration(ffmpegPath: "/missing/ffmpeg"))
         invalid.start()
-        try require(!invalid.isConnected && invalid.errorMessage != nil, "real launch error")
+        let launchFailed = await wait(seconds: 3) { invalid.errorMessage != nil }
+        try require(!invalid.isConnected && launchFailed, "real launch error")
         invalid.stop()
         print("PASS: audio teardown, reconnect generations, stop and no surviving owned processes, launch error")
         player.start()
@@ -106,7 +187,13 @@ import Darwin
         let closePIDs = player.ownedProcessIDs
         NotificationCenter.default.post(name: NSApplication.willTerminateNotification, object: nil)
         try require(closePIDs.allSatisfy { kill($0, 0) != 0 }, "appclose synchronously reaps all owned processes")
-        print("PASS: application termination notification flushes recording and reaps processes")
+        let closeProbe = Process()
+        closeProbe.executableURL = probe.executableURL
+        closeProbe.arguments = ["-v", "error", "-show_entries", "format=duration", root.appendingPathComponent("appclose.mkv").path]
+        closeProbe.standardOutput = FileHandle.nullDevice; closeProbe.standardError = FileHandle.nullDevice
+        try closeProbe.run(); closeProbe.waitUntilExit()
+        try require(closeProbe.terminationStatus == 0, "ffprobe reads appclose recording after synchronous flush")
+        print("PASS: application termination flushes readable recording and reaps processes")
         print("ARTIFACTS: \(root.path)")
     }
 }

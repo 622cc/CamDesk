@@ -66,7 +66,10 @@ struct CameraEditor:View {
                 let result=try await client.profiles()
                 guard !Task.isCancelled else{return}
                 profiles=result
-                if let first=result.first {draft.camera.profileToken=first.id;if let url=first.streamURL{draft.connection.streamURL=url.absoluteString}}
+                if let selected=result.first(where:{$0.id==draft.camera.profileToken}) ?? result.first {
+                    draft.camera.profileToken=selected.id
+                    if let url=selected.streamURL {draft.connection.streamURL=url.absoluteString}
+                }
                 if result.isEmpty {errorMessage="设备没有返回视频配置，请检查 ONVIF 权限。"}
             }catch{if !Task.isCancelled{errorMessage=error.localizedDescription}}
             isLoading=false

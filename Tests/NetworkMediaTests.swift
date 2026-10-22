@@ -27,7 +27,9 @@ import Darwin
                     try player.startRecording(to:url)
                     try await Task.sleep(nanoseconds:4_000_000_000)
                     player.stopRecording()
-                    try await Task.sleep(nanoseconds:1_000_000_000)
+                    guard player.isFinalizingRecording else {throw MediaEngineError.message("Missing recording finalization state")}
+                    try await wait("RTSP recording real exit",timeout:7) {!player.isFinalizingRecording}
+                    guard player.recordingError == nil else {throw MediaEngineError.message(player.recordingError!)}
                     let probe=Process();let pipe=Pipe();probe.executableURL=URL(fileURLWithPath:ProcessInfo.processInfo.environment["FFPROBE_PATH"] ?? "/opt/homebrew/bin/ffprobe");probe.arguments=["-v","error","-show_entries","format=duration","-of","default=nw=1:nk=1",url.path];probe.standardOutput=pipe;probe.standardError=FileHandle.nullDevice
                     try probe.run();let data=pipe.fileHandleForReading.readDataToEndOfFile();probe.waitUntilExit()
                     guard probe.terminationStatus==0,let duration=Double(String(decoding:data,as:UTF8.self).trimmingCharacters(in:.whitespacesAndNewlines)),duration>1 else {throw MediaEngineError.message("RTSP recording did not finalize")}

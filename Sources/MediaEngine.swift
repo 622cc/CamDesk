@@ -125,6 +125,14 @@ private final class MediaProcess: @unchecked Sendable {
             process.waitUntilExit(); closeHandles()
         }
     }
+    func waitForExit() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async { [self] in
+                process.waitUntilExit()
+                continuation.resume()
+            }
+        }
+    }
     deinit { if process.isRunning { process.terminate() } }
 }
 
@@ -162,6 +170,10 @@ private final class PCMOutput: @unchecked Sendable {
     @Published private(set) var status = "未连接"
     @Published private(set) var isConnected = false
     @Published private(set) var isRecording = false
+    @Published private(set) var isConnecting = false
+    @Published private(set) var isFinalizingRecording = false
+    @Published private(set) var recordingError: String?
+    var onRecordingFinished: ((URL, Bool) -> Void)?
     @Published private(set) var errorMessage: String?
     @Published var volume: Float = 1 { didSet { audioOutput?.setVolume(volume) } }
     @Published private(set) var isAudioEnabled = false
@@ -178,8 +190,23 @@ private final class PCMOutput: @unchecked Sendable {
     private var reconnectTask: Task<Void, Never>?
     private var timeoutTask: Task<Void, Never>?
     private var currentJPEG: Data?
+    private var transitionTask: Task<Void, Never>?
+    private var transitionGeneration = UUID()
+    private var retiring: [MediaProcess] = []
     private var closeObserver: NSObjectProtocol?
-    var ownedProcessIDs: [Int32] { [preview, recording, audio].compactMap { $0?.pid } }
+    var ownedProcessIDs: [Int32] { (retiring + [preview, recording, audio].compactMap { $0 }).filter { $0.process.isRunning }.map { $0.pid } }
+    private func cancelTransition() {
+        transitionGeneration = UUID(); transitionTask?.cancel(); transitionTask = nil
+    }
+    private func retire(_ process: MediaProcess?) {
+        guard let process else { return }
+        process.stop(); retiring.append(process)
+    }
+    private func waitForSessions() async {
+        let sessions = retiring + [recording].compactMap { $0 }
+        for process in sessions { await process.waitForExit() }
+        retiring.removeAll { !$0.process.isRunning }
+    }
     init(configuration: StreamConfiguration) {
         self.configuration = configuration
         closeObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
@@ -188,21 +215,32 @@ private final class PCMOutput: @unchecked Sendable {
     }
     deinit {
         if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
-        reconnectTask?.cancel(); timeoutTask?.cancel(); preview?.stop(); recording?.stop(); audio?.stop(); audioOutput?.stop()
+        transitionTask?.cancel(); reconnectTask?.cancel(); timeoutTask?.cancel(); preview?.stop(); recording?.stop(); audio?.stop(); audioOutput?.stop()
     }
     func start() { guard !wantsRunning else { return }; wantsRunning = true; retryCount = 0; launchPreview() }
     func stop() {
-        wantsRunning = false; generation = UUID(); reconnectTask?.cancel(); reconnectTask = nil; timeoutTask?.cancel(); timeoutTask = nil
-        preview?.stop(); preview = nil; stopRecording(); stopAudio(); isConnected = false; status = "已停止"
+        wantsRunning = false; cancelTransition(); generation = UUID(); reconnectTask?.cancel(); reconnectTask = nil; timeoutTask?.cancel(); timeoutTask = nil
+        retire(preview); preview = nil; stopRecording(); stopAudio(); isConnected = false; isConnecting = false; status = "已停止"
     }
     func reconnect() { stop(); start() }
     func update(configuration: StreamConfiguration) {
-        let running = wantsRunning; stop(); self.configuration = configuration; image = nil; currentJPEG = nil; errorMessage = nil
+        let running = wantsRunning; stop(); self.configuration = configuration; image = nil; currentJPEG = nil; errorMessage = nil; recordingError = nil
         if running { start() }
     }
     private func launchPreview() {
+        cancelTransition(); let token = transitionGeneration
+        isConnected = false; isConnecting = true; status = "连接中…"
+        transitionTask = Task { [weak self] in
+            guard let self else { return }
+            await self.waitForSessions()
+            guard !Task.isCancelled, self.transitionGeneration == token, self.wantsRunning, !self.isRecording else { return }
+            self.transitionTask = nil
+            self.launchPreviewNow()
+        }
+    }
+    private func launchPreviewNow() {
         generation = UUID(); let token = generation
-        isConnected = false; status = "连接中…"; errorMessage = nil
+        isConnected = false; isConnecting = true; status = "连接中…"; errorMessage = nil
         do {
             let args = try configuration.inputArguments() + ["-an", "-vf", "fps=12,scale=1280:720:force_original_aspect_ratio=decrease", "-c:v", "mjpeg", "-q:v", "4", "-f", "image2pipe", "pipe:1"]
             let process = try MediaProcess(path: configuration.ffmpegPath, arguments: args) { [weak self] code in Task { @MainActor in self?.previewEnded(token: token, reason: "视频流已断开（FFmpeg \(code)）。", exitCode: code) } }
@@ -220,7 +258,7 @@ private final class PCMOutput: @unchecked Sendable {
                         guard let self, self.generation == token, self.wantsRunning else { return }
                         let frame = NSImage(size: NSSize(width: bitmap.pixelsWide, height: bitmap.pixelsHigh)); frame.addRepresentation(bitmap)
                         self.image = frame; self.currentJPEG = jpeg
-                        let first = !self.isConnected; self.isConnected = true; self.status = "已连接"; self.errorMessage = nil
+                        let first = !self.isConnected; self.isConnected = true; self.isConnecting = false; self.status = "已连接"; self.errorMessage = nil
                         if first { self.timeoutTask?.cancel(); if self.isAudioEnabled { self.launchAudio() } }
                     }
                 }
@@ -235,7 +273,8 @@ private final class PCMOutput: @unchecked Sendable {
     }
     private func previewEnded(token: UUID, reason: String, exitCode: Int32? = nil) {
         guard generation == token, wantsRunning else { return }
-        generation = UUID(); timeoutTask?.cancel(); preview?.stop(); preview = nil; isConnected = false; stopAudio(); errorMessage = reason
+        generation = UUID(); let retryToken = generation
+        timeoutTask?.cancel(); retire(preview); preview = nil; isConnected = false; isConnecting = false; stopAudio(); errorMessage = reason
         if URL(string:configuration.url)?.isFileURL == true {
             wantsRunning=false;status=exitCode == 0 ? "播放结束" : "播放失败";errorMessage=exitCode == 0 ? nil : reason;return
         }
@@ -243,7 +282,7 @@ private final class PCMOutput: @unchecked Sendable {
         retryCount += 1; status = "等待重连（\(retryCount)/5）"; let delay = min(8, retryCount * 2)
         reconnectTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000_000)
-            guard !Task.isCancelled, let self, self.wantsRunning else { return }; self.launchPreview()
+            guard !Task.isCancelled, let self, self.wantsRunning, self.generation == retryToken else { return }; self.launchPreview()
         }
     }
     func snapshot(to url: URL) throws {
@@ -255,95 +294,97 @@ private final class PCMOutput: @unchecked Sendable {
     /// camera, keeps the screen fed, and writes the recording from the same decoders.
     /// Preview quality is unchanged; recording keeps the original video bitstream.
     func startRecording(to url: URL) throws {
-        guard recording == nil else { throw MediaEngineError.message("正在录制。") }
+        guard !isRecording, !isFinalizingRecording, recording == nil else { throw MediaEngineError.message("正在录制或保存录像，请稍候。") }
         guard url.isFileURL, url.pathExtension.lowercased() == "mkv", !FileManager.default.fileExists(atPath: url.path) else { throw MediaEngineError.message("请指定尚不存在的 .mkv 文件。") }
         guard wantsRunning else { throw MediaEngineError.message("请先连接摄像头，再开始录像。") }
-
-        if configuration.isDemo {
-            var args = (try configuration.inputArguments()) + ["-map", "0:v:0", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-f", "matroska", url.path]
-            args = ["-n"] + args
-            recordingGeneration = UUID(); let demoToken = recordingGeneration
-            let demo = try MediaProcess(path: configuration.ffmpegPath, arguments: args) { [weak self] code in
-                Task { @MainActor in
-                    guard let self, self.recordingGeneration == demoToken else { return }
-                    self.recording = nil; self.isRecording = false
-                    if code != 0 { self.errorMessage = "录像写入失败（FFmpeg \(code)）。" }
-                }
-            }
-            recording = demo; isRecording = true; demo.read { _ in }
-            return
-        }
-
-        // Step aside: release every other camera session before recording starts.
-        stopAudio()
-        preview?.stop(); preview = nil
-        image = nil; currentJPEG = nil; isConnected = false
-        generation = UUID(); timeoutTask?.cancel(); reconnectTask?.cancel()
-
         var args = try configuration.inputArguments()
-        args += ["-an", "-vf", "fps=12,scale=1280:720:force_original_aspect_ratio=decrease", "-c:v", "mjpeg", "-q:v", "4", "-f", "image2pipe", "pipe:1"]
-        args += ["-map", "0:v:0", "-c", "copy", "-f", "matroska", url.path]
-        args = ["-n"] + args
-
-        recordingGeneration = UUID(); let token = recordingGeneration
-        let process = try MediaProcess(path: configuration.ffmpegPath, arguments: args) { [weak self] code in
-            Task { @MainActor in
-                guard let self, self.recordingGeneration == token else { return }
-                let wasRecording = self.isRecording
-                self.recording = nil; self.isRecording = false
-                if code != 0 {
-                    self.errorMessage = code == 183
-                        ? "摄像头不接受第二条连接，录像未能开始。请关闭手机 App 等其它观看端后重试。"
-                        : "录像写入失败（FFmpeg \(code)）。"
-                } else if wasRecording {
-                    self.errorMessage = nil
-                }
-                self.resumePreviewAfterRecording()
-            }
+        guard FileManager.default.isExecutableFile(atPath: configuration.ffmpegPath) else { throw MediaEngineError.message("FFmpeg 路径不存在或不可执行。") }
+        let demo = configuration.isDemo
+        if demo {
+            args += ["-map", "0:v:0", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-f", "matroska", url.path]
+        } else {
+            args += ["-an", "-vf", "fps=12,scale=1280:720:force_original_aspect_ratio=decrease", "-c:v", "mjpeg", "-q:v", "4", "-f", "image2pipe", "pipe:1"]
+            args += ["-map", "0:v:0", "-c", "copy", "-f", "matroska", url.path]
         }
-        recording = process; isRecording = true
-        var parser = JPEGStreamParser(); var lastDelivery = Date.distantPast
-        let deliverySlot = DispatchSemaphore(value: 1)
-        process.read { [weak self] data in
-            for jpeg in parser.append(data) {
-                guard Date().timeIntervalSince(lastDelivery) >= 1.0 / 12.0,
-                      deliverySlot.wait(timeout: .now()) == .success else { continue }
-                guard let bitmap = NSBitmapImageRep(data: jpeg), bitmap.cgImage != nil else { deliverySlot.signal(); continue }
-                lastDelivery = Date()
-                Task { @MainActor [weak self] in
-                    defer { deliverySlot.signal() }
-                    guard let self, self.recordingGeneration == token, self.wantsRunning else { return }
-                    let frame = NSImage(size: NSSize(width: bitmap.pixelsWide, height: bitmap.pixelsHigh)); frame.addRepresentation(bitmap)
-                    self.image = frame; self.currentJPEG = jpeg; self.isConnected = true; self.status = "录制中"
+        cancelTransition(); let transitionToken = transitionGeneration
+        recordingGeneration = UUID(); let token = recordingGeneration
+        isRecording = true; recordingError = nil; errorMessage = nil
+        if !demo {
+            generation = UUID(); timeoutTask?.cancel(); reconnectTask?.cancel()
+            stopAudio(); retire(preview); preview = nil
+            image = nil; currentJPEG = nil; isConnected = false; isConnecting = true
+        }
+        let path = configuration.ffmpegPath
+        transitionTask = Task { [weak self] in
+            guard let self else { return }
+            await self.waitForSessions()
+            guard !Task.isCancelled, self.transitionGeneration == transitionToken, self.wantsRunning, self.isRecording else { return }
+            self.transitionTask = nil
+            do {
+                let process = try MediaProcess(path: path, arguments: ["-n"] + args) { [weak self] code in
+                    Task { @MainActor in self?.recordingEnded(token: token, url: url, code: code) }
                 }
+                self.recording = process
+                if demo { process.read { _ in }; return }
+                var parser = JPEGStreamParser(); var lastDelivery = Date.distantPast
+                let deliverySlot = DispatchSemaphore(value: 1)
+                process.read { [weak self] data in
+                    for jpeg in parser.append(data) {
+                        guard Date().timeIntervalSince(lastDelivery) >= 1.0 / 12.0,
+                              deliverySlot.wait(timeout: .now()) == .success else { continue }
+                        guard let bitmap = NSBitmapImageRep(data: jpeg), bitmap.cgImage != nil else { deliverySlot.signal(); continue }
+                        lastDelivery = Date()
+                        Task { @MainActor [weak self] in
+                            defer { deliverySlot.signal() }
+                            guard let self, self.recordingGeneration == token, self.wantsRunning, self.isRecording else { return }
+                            let frame = NSImage(size: NSSize(width: bitmap.pixelsWide, height: bitmap.pixelsHigh)); frame.addRepresentation(bitmap)
+                            self.image = frame; self.currentJPEG = jpeg; self.isConnected = true; self.isConnecting = false; self.status = "录制中"
+                        }
+                    }
+                }
+            } catch {
+                self.recordingEnded(token: token, url: url, code: -1)
             }
         }
     }
+    private func recordingEnded(token: UUID, url: URL, code: Int32) {
+        guard recordingGeneration == token else { return }
+        recordingGeneration = UUID()
+        recording = nil; isRecording = false; isFinalizingRecording = false; isConnecting = false
+        recordingError = code == 0 ? nil : code == 183
+            ? "摄像头不接受第二条连接，录像未能开始。请关闭手机 App 等其它观看端后重试。"
+            : "录像写入失败（FFmpeg \(code)）。"
+        if let recordingError { errorMessage = recordingError }
+        if wantsRunning { status = code == 0 ? "录像已保存" : "录像保存失败" }
+        onRecordingFinished?(url, code == 0)
+        resumePreviewAfterRecording()
+    }
     private func resumePreviewAfterRecording() {
-        guard wantsRunning, recording == nil else { return }
-        generation = UUID(); retryCount = 0
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 800_000_000)
-            guard let self, self.wantsRunning, self.recording == nil else { return }
-            self.launchPreview()
-        }
+        guard wantsRunning, recording == nil, !isRecording, preview == nil else { return }
+        retryCount = 0; launchPreview()
     }
     func stopRecording() {
         guard recording != nil || isRecording else { return }
-        recordingGeneration = UUID(); recording?.stop(); recording = nil; isRecording = false
-        status = "录像已保存"
-        resumePreviewAfterRecording()
+        cancelTransition(); isRecording = false
+        if let recording {
+            isFinalizingRecording = true
+            if wantsRunning { status = "正在保存录像…" }
+            recording.stop()
+        } else {
+            isConnecting = false
+            resumePreviewAfterRecording()
+        }
     }
     /// Audio only plays while no recording owns the single camera session.
     func setAudioEnabled(_ enabled: Bool) {
-        if enabled && recording != nil {
+        if enabled && (isRecording || isFinalizingRecording) {
             errorMessage = "录制期间无法同时监听音频：摄像头只允许一条连接。请先停止录像。"
             isAudioEnabled = false; return
         }
         isAudioEnabled = enabled
         if enabled && isConnected { launchAudio() } else if !enabled { stopAudio() }
     }
-    private func stopAudio() { audioGeneration = UUID(); audio?.stop(); audio = nil; audioOutput?.stop(); audioOutput = nil }
+    private func stopAudio() { audioGeneration = UUID(); retire(audio); audio = nil; audioOutput?.stop(); audioOutput = nil }
     private func launchAudio() {
         stopAudio(); audioGeneration = UUID(); let token = audioGeneration
         do {

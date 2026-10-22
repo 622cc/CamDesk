@@ -111,13 +111,15 @@ final class CredentialVault {
     private var ptzClients: [UUID:ONVIFClient] = [:]
     private var ptzTasks: [UUID:Task<Void,Never>] = [:]
     private var stopping = false
+    private var appliedFFmpegPath = ""
+    private var preferencesTask: Task<Void, Never>?
     private let stateURL: URL
-    init() {
+    init(stateURL customStateURL: URL? = nil) {
         let support = FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0]
         let base = support.appendingPathComponent("com.github.622cc.camdesk",isDirectory:true)
-        stateURL = base.appendingPathComponent("configuration.json")
+        stateURL = customStateURL ?? base.appendingPathComponent("configuration.json")
         let legacy = support.appendingPathComponent("local.camdesk.mac",isDirectory:true).appendingPathComponent("configuration.json")
-        if !FileManager.default.fileExists(atPath:stateURL.path),FileManager.default.fileExists(atPath:legacy.path) {
+        if customStateURL == nil, !FileManager.default.fileExists(atPath:stateURL.path),FileManager.default.fileExists(atPath:legacy.path) {
             do {try FileManager.default.createDirectory(at:base,withIntermediateDirectories:true);try FileManager.default.copyItem(at:legacy,to:stateURL)}
             catch {issue=AppIssue(message:"旧版摄像头配置迁移失败：\(error.localizedDescription)")}
         }
@@ -128,9 +130,12 @@ final class CredentialVault {
                 cameras = state.cameras; preferences = state.preferences
             } catch { issue = AppIssue(message:"读取 CamDesk 配置失败：\(error.localizedDescription)") }
         }
+        appliedFFmpegPath = preferences.ffmpegPath
         selectedID = cameras.first(where: { !$0.isDemo })?.id ?? cameras.first?.id
         for camera in cameras {
-            players[camera.id]=CameraPlayer(configuration:StreamConfiguration(id:camera.id,name:camera.name,isDemo:camera.isDemo,ffmpegPath:preferences.ffmpegPath))
+            let player=CameraPlayer(configuration:StreamConfiguration(id:camera.id,name:camera.name,isDemo:camera.isDemo,ffmpegPath:preferences.ffmpegPath))
+            observeRecording(player)
+            players[camera.id]=player
         }
         NotificationCenter.default.addObserver(forName:NSApplication.willTerminateNotification,object:nil,queue:.main) { [weak self] _ in
             MainActor.assumeIsolated { self?.shutdown() }
@@ -167,19 +172,27 @@ final class CredentialVault {
         return result
     }
     func configuration(for camera: CameraRecord) throws -> StreamConfiguration {
+        if camera.isDemo { return StreamConfiguration(id:camera.id,name:camera.name,isDemo:true,ffmpegPath:preferences.ffmpegPath) }
         let c = try connection(for:camera)
         return StreamConfiguration(id:camera.id,name:camera.name,url:c.streamURL,username:c.username,password:c.password,useTCP:camera.useTCP,isDemo:camera.isDemo,ffmpegPath:preferences.ffmpegPath)
     }
+    private func observeRecording(_ player: CameraPlayer) {
+        player.onRecordingFinished = { [weak self] _, saved in
+            guard let self else { return }
+            self.refreshLibrary()
+            if saved { self.notify("录像已保存") }
+        }
+    }
     func player(for camera: CameraRecord) -> CameraPlayer? {
         if let player = players[camera.id] { return player }
-        do { let player = CameraPlayer(configuration:try configuration(for:camera)); players[camera.id]=player; return player }
+        do { let player = CameraPlayer(configuration:try configuration(for:camera)); observeRecording(player); players[camera.id]=player; return player }
         catch { report(error); return nil }
     }
     func reconnect(_ camera:CameraRecord) {
         Task { [weak self] in
             guard let self else{return}
             do {
-                if self.connections[camera.id]==nil {
+                if self.connections[camera.id]==nil && !camera.isDemo {
                     let id=camera.id
                     let loaded=try await Task.detached {try CredentialVault().load(id) ?? ConnectionSecrets()}.value
                     guard self.cameras.contains(where:{$0.id==id}),!self.stopping else{return}
@@ -217,7 +230,9 @@ final class CredentialVault {
         if let i=cameras.firstIndex(where:{$0.id==camera.id}) { cameras[i]=camera } else { cameras.append(camera) }
         do { try persist() } catch { cameras=previous;throw error }
         players[camera.id]?.stop()
-        players[camera.id]=CameraPlayer(configuration:try configuration(for:camera))
+        let player=CameraPlayer(configuration:try configuration(for:camera))
+        observeRecording(player)
+        players[camera.id]=player
         ptzClients[camera.id]=nil
         if camera.autoConnect { players[camera.id]?.start() }
         selectedID=camera.id;section="live";focusedView=true;notify("已保存 \(camera.name)")
@@ -257,9 +272,12 @@ final class CredentialVault {
     }
     func toggleRecording(_ camera: CameraRecord) {
         guard let player=player(for:camera) else{return}
-        do {if player.isRecording {player.stopRecording();notify("录像正在保存")} else {try player.startRecording(to:outputURL(camera:camera,extension:"mkv"));notify("已开始录像")}}
+        do {
+            if player.isFinalizingRecording { return }
+            if player.isRecording { player.stopRecording() }
+            else { try player.startRecording(to:outputURL(camera:camera,extension:"mkv"));notify("正在开始录像…") }
+        }
         catch {report(error)}
-        Task {try? await Task.sleep(nanoseconds:1_000_000_000);refreshLibrary()}
     }
     func chooseOutputDirectory() {
         let panel=NSOpenPanel();panel.canChooseFiles=false;panel.canChooseDirectories=true;panel.canCreateDirectories=true;panel.prompt="选择保存位置"
@@ -340,7 +358,31 @@ final class CredentialVault {
         if !player.isAudioEnabled { players.values.filter { $0 !== player }.forEach { $0.setAudioEnabled(false) } }
         player.setAudioEnabled(!player.isAudioEnabled)
     }
-    func savePreferences() {do{try persist();notify("设置已保存")}catch{report(error)}}
+    func savePreferences() {
+        preferencesTask?.cancel()
+        let requested = preferences
+        preferencesTask = Task { [weak self] in
+            let valid = await Task.detached { FFmpegLocator.version(of: requested.ffmpegPath) != nil }.value
+            guard !Task.isCancelled, let self, !self.stopping else { return }
+            guard valid else { self.issue=AppIssue(message:"请选择有效的 FFmpeg 可执行文件，再保存设置。"); return }
+            guard self.preferences.ffmpegPath == requested.ffmpegPath else { return }
+            let changed = self.appliedFFmpegPath != requested.ffmpegPath
+            if changed && self.players.values.contains(where: { $0.isRecording || $0.isFinalizingRecording }) {
+                self.issue=AppIssue(message:"请先停止录像并等待保存完成，再更换视频引擎。"); return
+            }
+            do {
+                try self.persist()
+                if changed {
+                    for camera in self.cameras {
+                        guard camera.isDemo || self.connections[camera.id] != nil else { continue }
+                        self.players[camera.id]?.update(configuration:try self.configuration(for:camera))
+                    }
+                    self.appliedFFmpegPath = requested.ffmpegPath
+                }
+                self.notify("设置已保存")
+            } catch { self.report(error) }
+        }
+    }
     func disconnectAll() {players.values.forEach{$0.stop()}}
     func shutdown() {guard !stopping else{return};stopping=true;ptzTasks.values.forEach{$0.cancel()};disconnectAll()}
 }

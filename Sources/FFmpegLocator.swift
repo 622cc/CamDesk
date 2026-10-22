@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 // Resolves the FFmpeg binary without hard-coding a Homebrew path, so Apple Silicon,
 // Intel, MacPorts and manually installed builds all work out of the box.
@@ -39,13 +40,42 @@ enum FFmpegLocator {
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = ["-version"]
         let pipe = Pipe()
+        let exited = DispatchSemaphore(value: 0)
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { _ in exited.signal() }
+        let descriptor = pipe.fileHandleForReading.fileDescriptor
+        _ = fcntl(descriptor, F_SETFL, fcntl(descriptor, F_GETFL) | O_NONBLOCK)
+        defer {
+            try? pipe.fileHandleForReading.close()
+            try? pipe.fileHandleForWriting.close()
+        }
+        var output = Data()
+        func drain() {
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            for _ in 0..<16 {
+                let count = Darwin.read(descriptor, &buffer, buffer.count)
+                guard count > 0 else { break }
+                output.append(contentsOf: buffer.prefix(min(count, max(0, 4096 - output.count))))
+            }
+        }
         do { try process.run() } catch { return nil }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        try? pipe.fileHandleForWriting.close()
+        let deadline = Date().addingTimeInterval(2)
+        var finished = false
+        repeat {
+            drain()
+            if exited.wait(timeout: .now() + 0.025) == .success { finished = true; break }
+        } while Date() < deadline
+        if !finished {
+            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            process.waitUntilExit()
+            return nil
+        }
         process.waitUntilExit()
+        drain()
         guard process.terminationStatus == 0 else { return nil }
-        let firstLine = String(decoding: data, as: UTF8.self).split(separator: "\n").first.map(String.init) ?? ""
-        return firstLine.isEmpty ? nil : firstLine
+        let firstLine = String(decoding: output, as: UTF8.self).split(separator: "\n").first.map(String.init) ?? ""
+        return firstLine.hasPrefix("ffmpeg version ") ? firstLine : nil
     }
 }

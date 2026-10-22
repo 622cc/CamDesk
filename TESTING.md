@@ -18,7 +18,11 @@ The script creates fixtures and recordings in a temporary directory, starts the 
 
 - JPEG frame boundary parsing and size limits
 - RTSP TCP/UDP, MJPEG and HLS decoding with generated local streams
-- Recording finalization and local playback
+- Recording finalization, single-session handoff, cancellation, nonzero exit handling and local playback
+- Demo preview process reuse and application-exit recording flush
+- FFmpeg version validation, incorrect executables and probe timeouts
+- Native video zoom, panning, wheel input and reset
+- Recording completion feedback, library refresh and engine changes using an isolated configuration
 - ONVIF WS-Security, media profiles, stream URI and PTZ SOAP calls
 - Invalid ONVIF credentials
 - Configuration serialization and Keychain add/read/update/delete
